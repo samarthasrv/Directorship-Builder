@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Directorship Builder</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Directorship Builder</h1>
+
+    <p class="hint">
+      Paste a Companies House officer appointments link like:
+      <code>https://find-and-update.company-information.service.gov.uk/officers/&lt;OFFICER_ID&gt;/appointments</code>
+    </p>
+
+    <form method="post" class="card">
+      <label for="url">Officer appointments link</label>
+      <input
+        id="url"
+        name="url"
+        type="url"
+        placeholder="Paste the Companies House officer appointments URL here…"
+        value="{{ url }}"
+        required
+      />
+
+      <label class="checkbox">
+        <input type="checkbox" name="active_only" {% if active_only %}checked{% endif %} />
+        Only active appointments
+      </label>
+
+      <button type="submit">Build directorship list</button>
+    </form>
+
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    {% if output %}
+      <h2>Output</h2>
+      <textarea id="output" rows="16" readonly>{{ output }}</textarea>
+
+      <div class="row">
+        <button type="button" onclick="copyAll()">Copy all</button>
+        {% if api_url %}
+          <a class="api-link" href="{{ api_url }}">View JSON</a>
+        {% endif %}
+      </div>
+    {% endif %}
+  </main>
+
+  <script>
+    function copyAll() {
+      const el = document.getElementById("output");
+      if (!el) return;
+
+      el.focus();
+      el.select();
+
+      // Modern clipboard API (best)
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(el.value).catch(() => {
+          document.execCommand("copy");
+        });
+      } else {
+        // Fallback
+        document.execCommand("copy");
+      }
+    }
+  </script>
+</body>
+</html>
