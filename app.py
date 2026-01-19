@@ -11,9 +11,6 @@ CH_API_BASE = "https://api.company-information.service.gov.uk"
 app = Flask(__name__)
 
 
-# ----------------------------
-# Helpers
-# ----------------------------
 def get_api_key() -> str | None:
     key = (os.environ.get("COMPANIES_HOUSE_API_KEY") or "").strip()
     return key or None
@@ -28,19 +25,13 @@ def extract_officer_id(user_input: str) -> str:
     if "/" not in s and re.fullmatch(r"[A-Za-z0-9_-]{10,}", s):
         return s
 
-    try:
-        parsed = urlparse(s)
-    except Exception:
-        raise ValueError("That doesn't look like a valid URL.")
-
+    parsed = urlparse(s)
     path = parsed.path or ""
 
-    # Preferred: /officers/<id>/appointments
     m = re.search(r"/officers/([^/]+)/appointments", path)
     if m:
         return m.group(1)
 
-    # Fallback: /officers/<id>
     m = re.search(r"/officers/([^/]+)", path)
     if m:
         return m.group(1)
@@ -61,7 +52,6 @@ def parse_date(date_str: str | None):
 
 
 def format_month_year(d) -> str:
-    # e.g., July 1991
     return d.strftime("%B %Y")
 
 
@@ -69,20 +59,10 @@ def format_role(role: str | None) -> str:
     if not role:
         return "Officer"
 
-    # officer_role values are like: director, llp-designated-member, corporate-secretary...
     raw = role.replace("_", "-").strip().lower()
     parts = [p for p in raw.split("-") if p]
 
-    # Keep some acronyms uppercase
-    acronym_map = {
-        "llp": "LLP",
-        "cic": "CIC",
-        "uk": "UK",
-        "eu": "EU",
-        "usa": "USA",
-    }
-
-    # Lower-case some small words in the middle
+    acronym_map = {"llp": "LLP", "cic": "CIC", "uk": "UK", "eu": "EU", "usa": "USA"}
     lower_words = {"of", "a", "an", "the", "and", "to", "for", "in", "on", "at", "by", "with"}
 
     out = []
@@ -98,11 +78,6 @@ def format_role(role: str | None) -> str:
 
 
 def smart_company_case(name: str | None) -> str:
-    """
-    Companies House often returns company_name in ALL CAPS.
-    This converts ALL-CAPS names into a friendlier form while preserving common acronyms.
-    If it's not all-caps, we leave it untouched.
-    """
     if not name:
         return "Unknown company"
 
@@ -132,7 +107,6 @@ def smart_company_case(name: str | None) -> str:
     words = s.split(" ")
     out_words = []
 
-    # preserve leading/trailing punctuation around each word
     word_re = re.compile(r"^([^A-Za-z0-9]*)(.*?)([^A-Za-z0-9]*)$")
 
     for w in words:
@@ -148,10 +122,8 @@ def smart_company_case(name: str | None) -> str:
         if core_clean in special:
             new_core = special[core_clean]
         elif core_clean.isalpha() and len(core_clean) <= 3 and core_clean not in exclude_small:
-            # Keep short acronyms like "IBM", "JPM"
             new_core = core_clean
         elif any(ch.isdigit() for ch in core):
-            # Keep words with digits as-is (e.g., "3M")
             new_core = core
         else:
             new_core = core.lower().title()
@@ -162,11 +134,6 @@ def smart_company_case(name: str | None) -> str:
 
 
 def fetch_all_appointments(officer_id: str, api_key: str, active_only: bool = False) -> list[dict]:
-    """
-    Calls:
-      GET /officers/{officer_id}/appointments
-    Supports pagination via items_per_page + start_index.
-    """
     items: list[dict] = []
     start_index = 0
     items_per_page = 100
@@ -178,18 +145,15 @@ def fetch_all_appointments(officer_id: str, api_key: str, active_only: bool = Fa
     while True:
         params["start_index"] = start_index
         url = f"{CH_API_BASE}/officers/{officer_id}/appointments"
-
         resp = requests.get(url, params=params, auth=(api_key, ""), timeout=20)
 
         if resp.status_code == 401:
             raise PermissionError(
                 "Companies House rejected your API key (401 Unauthorized). "
-                "Check COMPANIES_HOUSE_API_KEY in your deployment settings."
+                "Check COMPANIES_HOUSE_API_KEY in your host settings."
             )
         if resp.status_code == 404:
-            raise FileNotFoundError(
-                "Officer not found (404). Double-check the officer link / officer id."
-            )
+            raise FileNotFoundError("Officer not found (404). Double-check the link.")
         if resp.status_code >= 400:
             raise RuntimeError(f"Companies House API error ({resp.status_code}): {resp.text[:300]}")
 
@@ -201,7 +165,6 @@ def fetch_all_appointments(officer_id: str, api_key: str, active_only: bool = Fa
         if total is not None and len(items) >= total:
             break
 
-        # If no total_results, stop when the API stops returning items
         if not page_items:
             break
 
@@ -210,10 +173,15 @@ def fetch_all_appointments(officer_id: str, api_key: str, active_only: bool = Fa
     return items
 
 
-def build_output_lines(appointments: list[dict]) -> list[str]:
-    lines = []
+def build_table_rows(appointments: list[dict]) -> list[dict]:
+    """
+    Returns rows like:
+      {"company": "Reliance Europe Limited", "appointment": "Director (July 1991 - June 2017)"}
+    """
+    rows: list[dict] = []
+
     for item in appointments:
-        company_name = smart_company_case((item.get("appointed_to") or {}).get("company_name"))
+        company = smart_company_case((item.get("appointed_to") or {}).get("company_name"))
         role = format_role(item.get("officer_role"))
 
         appointed_on = parse_date(item.get("appointed_on"))
@@ -229,45 +197,45 @@ def build_output_lines(appointments: list[dict]) -> list[str]:
 
         end_label = format_month_year(resigned_on) if resigned_on else "Present"
 
-        lines.append(f"{company_name} - {role} ({start_label} - {end_label})")
+        appointment = f"{role} ({start_label} - {end_label})"
+        rows.append({"company": company, "appointment": appointment})
 
-    return lines
+    return rows
 
 
-# ----------------------------
-# Routes
-# ----------------------------
 @app.get("/")
 def home_get():
-    return render_template("index.html", url="", output="", error="", active_only=False, api_url="")
+    return render_template(
+        "index.html",
+        url="",
+        rows=[],
+        error="",
+        active_only=False,
+        api_url="",
+    )
 
 
 @app.post("/")
 def home_post():
     api_key = get_api_key()
+    url = request.form.get("url", "").strip()
+    active_only = bool(request.form.get("active_only"))
+
     if not api_key:
         return render_template(
             "index.html",
-            url=request.form.get("url", ""),
-            output="",
-            error=(
-                "Missing COMPANIES_HOUSE_API_KEY. "
-                "Add it as an environment variable / Config Var in your host (e.g., Heroku)."
-            ),
-            active_only=bool(request.form.get("active_only")),
+            url=url,
+            rows=[],
+            error="Missing COMPANIES_HOUSE_API_KEY (set it in Heroku/Railway env vars).",
+            active_only=active_only,
             api_url="",
         )
-
-    url = request.form.get("url", "").strip()
-    active_only = bool(request.form.get("active_only"))
 
     try:
         officer_id = extract_officer_id(url)
         appts = fetch_all_appointments(officer_id, api_key, active_only=active_only)
-        lines = build_output_lines(appts)
-        output = "\n".join(lines)
+        rows = build_table_rows(appts)
 
-        # Provide a JSON endpoint link user can click
         api_url = "/api?url=" + requests.utils.quote(url)
         if active_only:
             api_url += "&active_only=1"
@@ -275,7 +243,7 @@ def home_post():
         return render_template(
             "index.html",
             url=url,
-            output=output,
+            rows=rows,
             error="",
             active_only=active_only,
             api_url=api_url,
@@ -284,7 +252,7 @@ def home_post():
         return render_template(
             "index.html",
             url=url,
-            output="",
+            rows=[],
             error=str(e),
             active_only=active_only,
             api_url="",
@@ -303,19 +271,11 @@ def api():
     try:
         officer_id = extract_officer_id(url)
         appts = fetch_all_appointments(officer_id, api_key, active_only=active_only)
-        lines = build_output_lines(appts)
-        return jsonify(
-            {
-                "officer_id": officer_id,
-                "count": len(lines),
-                "lines": lines,
-            }
-        )
+        rows = build_table_rows(appts)
+        return jsonify({"officer_id": officer_id, "count": len(rows), "rows": rows})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
 
 if __name__ == "__main__":
-    # Local dev convenience:
-    #   COMPANIES_HOUSE_API_KEY=... python app.py
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=True)
